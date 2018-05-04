@@ -1,0 +1,187 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+package com.fauna.learnfauna
+
+/*
+ * These imports are for basic functionality around logging and JSON handling and Futures.
+ * They should best be thought of as convenience items for our demo apps.
+ */
+import grizzled.slf4j.Logging
+
+import scala.concurrent.duration.Duration
+import scala.concurrent.{Await, ExecutionContext}
+
+/*
+ * These are the required imports for Fauna.
+ *
+ * For these examples we are using the 2.1.0 version of the JVM driver. Also notice that we aliasing
+ * the query and values part of the API to make it more obvious we we are using Fauna functionality.
+ *
+ */
+import faunadb.{FaunaClient, query => q, values => v}
+
+object Lesson2 extends App with Logging {
+  import ExecutionContext.Implicits._
+
+  /*
+   * Get the configuration values for FaunaDB contained in the application.conf file.
+   */
+  val config = FaunaDBConfig.getConfig
+
+  logger.info(s"FaunaDB root URL: ${config("root_url")}")
+  logger.info(s"FaunaDB security key: ${config("root_token")}")
+
+
+  /*
+   * Create an admin client. This is the client we will use to create the database.
+   *
+   * If you are using the the FaunaDB-Cloud you will need to replace the value of the
+   * 'secret' in the command below with your "secret".
+   */
+  val adminClient = FaunaClient(endpoint = config("root_url"), secret = config("root_token"))
+  logger.info("Connected to FaunaDB as Admin!")
+
+  /*
+   * The code below creates the Database that will be used for this example. Please note that
+   * the existence of the database is evaluated, deleted if it exists and recreated with a single
+   * call to the Fauna DB.
+   */
+  val dbName = "LedgerExample"
+
+  var queryResponse = adminClient.query(
+    q.Arr(
+      q.If(
+        q.Exists(q.Database(dbName)),
+        q.Delete(q.Database(dbName)),
+        true
+      ),
+      q.CreateDatabase(q.Obj("name" -> dbName))
+    )
+  )
+  Await.result(queryResponse, Duration.Inf)
+  logger.info(s"Created database: ${dbName} :: \n${JsonUtil.toJson(queryResponse)}")
+
+  /*
+   * Create a key specific to the database we just created. We will use this to
+   * create a new client we will use in the remainder of the examples.
+   */
+  queryResponse = adminClient.query(
+    q.CreateKey(q.Obj("database" -> q.Database(dbName), "role" -> "server"))
+  )
+  val key = Await.result(queryResponse, Duration.Inf)
+  val serverKey = key(v.Field("secret").to[String]).get
+  logger.info(s"DB ${dbName} secret: ${serverKey}")
+
+  /*
+   * Create the DB specific DB client using the DB specific key just created.
+   */
+  val client = FaunaClient(endpoint = config("root_url"), secret = serverKey)
+
+  /*
+   * Create an class to hold customers
+   */
+  queryResponse = client.query(
+    q.CreateClass(q.Obj("name" -> "customers"))
+  )
+  Await.result(queryResponse, Duration.Inf)
+  logger.info(s"Created customer class :: \n${JsonUtil.toJson(queryResponse)}")
+
+  /*
+   * Create the Indexes within the database. We will use these to access record in later lessons
+   */
+  queryResponse = client.query(
+    q.Arr(
+      q.CreateIndex(
+        q.Obj(
+          "name" -> "customer_by_id",
+          "source" -> q.Class("customers"),
+          "unique" -> true,
+          "terms" -> q.Arr(q.Obj("field" -> q.Arr("data", "id")))
+        )
+      )
+    )
+  )
+  Await.result(queryResponse, Duration.Inf)
+  logger.info(s"Created customer_by_id index :: \n${JsonUtil.toJson(queryResponse)}")
+
+  /*
+   * Create a customer (record)
+  */
+  val custID = 0
+  var balance = 100.0
+  queryResponse = client.query(
+    q.Create(
+      q.Class("customers"), q.Obj("data" -> q.Obj("id" -> custID, "balance" -> balance))
+    )
+  )
+  Await.result(queryResponse, Duration.Inf)
+  logger.info(s"Create \'customer\' ${custID}: \n${JsonUtil.toJson(queryResponse)}")
+
+  /*
+   * Read the customer we just created
+   */
+  queryResponse = client.query(
+    q.Select("data", q.Get(q.Match(q.Index("customer_by_id"), custID)))
+  )
+  Await.result(queryResponse, Duration.Inf)
+  logger.info(s"Read \'customer\' ${custID}: \n${JsonUtil.toJson(queryResponse)}")
+
+  /*
+   * Update the customer
+   */
+  balance = 200.0
+  queryResponse = client.query(
+    q.Update(
+      q.Select("ref", q.Get(q.Match(q.Index("customer_by_id"), custID))),
+      q.Obj("data" -> q.Obj("balance" -> balance)
+      )
+    )
+  )
+  Await.result(queryResponse, Duration.Inf)
+  logger.info(s"Update \'customer\' ${custID}: \n${JsonUtil.toJson(queryResponse)}")
+
+  /*
+   * Read the updated customer
+   */
+  queryResponse = client.query(
+    q.Select("data", q.Get(q.Match(q.Index("customer_by_id"), custID)))
+  )
+  Await.result(queryResponse, Duration.Inf)
+  logger.info(s"Read \'customer\' ${custID}: \n${JsonUtil.toJson(queryResponse)}")
+
+  /*
+   * Delete the customer
+   */
+//  queryResponse = client.query(
+//    q.Delete(
+//      q.Select("ref", q.Get(q.Match(q.Index("customer_by_id"), custID)))
+//    )
+//  )
+//  logger.info(s"Delete \'customer\' ${custID}: \n${toJson(queryResponse)}")
+
+  /*
+   * Just to keep things neat and tidy, close the client connections
+   */
+  client.close()
+  logger.info(s"Disconnected from FaunaDB as server for DB ${dbName}!")
+  adminClient.close()
+  logger.info("Disconnected from FaunaDB as Admin!")
+
+  // add this at the end of execution to make things shut down nicely
+  System.exit(0)
+}
+
