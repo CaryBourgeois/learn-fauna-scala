@@ -32,28 +32,21 @@ import scala.concurrent.duration.Duration
  * the query and values part of the API to make it more obvious we we are using Fauna functionality.
  *
  */
-import faunadb.FaunaClient
-import faunadb.{query => q}
-import faunadb.{values =>v}
-
+import faunadb.{FaunaClient, query => q, values =>v}
 
 object Lesson1 extends App with Logging {
   import ExecutionContext.Implicits._
 
   /*
-   * Get the configuration values for FaunaDB contained in the application.conf file.
-   */
-  val config = FaunaDBConfig.getConfig
-
-  logger.info(s"FaunaDB root URL: ${config("root_url")}")
-  logger.info(s"FaunaDB security key: ${config("root_token")}")
-
-  /*
    * Create an admin connection to FaunaDB.
    *
-   * This is only used if you are using your own Developers or Enterprise edition of FaunaDB
+   * If you are using the FaunaDB-Cloud version:
+   *  - remove the 'endpoint = endPoint' line below
+   *  - substitute your secret for "secret" below
    */
-  val adminClient = FaunaClient(endpoint = config("root_url"), secret = config("root_token"))
+  val endPoint = "http://127.0.0.1:8443"
+  val secret = "secret"
+  val adminClient = FaunaClient(endpoint = endPoint, secret = secret)
 
   logger.info("Succesfully connected to FaunaDB as Admin!")
 

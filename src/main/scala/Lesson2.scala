@@ -37,149 +37,164 @@ import faunadb.{FaunaClient, query => q, values => v}
 object Lesson2 extends App with Logging {
   import ExecutionContext.Implicits._
 
-  /*
-   * Get the configuration values for FaunaDB contained in the application.conf file.
-   */
-  val config = FaunaDBConfig.getConfig
+  def createDatabase (dcURL: String, secret: String, dbName: String): String = {
+    /*
+     * Create an admin client. This is the client we will use to create the database.
+     */
+    val adminClient = FaunaClient(endpoint = dcURL, secret = secret)
+    logger.info("Connected to FaunaDB as Admin!")
 
-  logger.info(s"FaunaDB root URL: ${config("root_url")}")
-  logger.info(s"FaunaDB security key: ${config("root_token")}")
-
-
-  /*
-   * Create an admin client. This is the client we will use to create the database.
-   *
-   * If you are using the the FaunaDB-Cloud you will need to replace the value of the
-   * 'secret' in the command below with your "secret".
-   */
-  val adminClient = FaunaClient(endpoint = config("root_url"), secret = config("root_token"))
-  logger.info("Connected to FaunaDB as Admin!")
-
-  /*
-   * The code below creates the Database that will be used for this example. Please note that
-   * the existence of the database is evaluated, deleted if it exists and recreated with a single
-   * call to the Fauna DB.
-   */
-  val dbName = "LedgerExample"
-
-  var queryResponse = adminClient.query(
-    q.Arr(
-      q.If(
-        q.Exists(q.Database(dbName)),
-        q.Delete(q.Database(dbName)),
-        true
-      ),
-      q.CreateDatabase(q.Obj("name" -> dbName))
+    /*
+     * The code below creates the Database that will be used for this example. Please note that
+     * the existence of the database is evaluated, deleted if it exists and recreated with a single
+     * call to the Fauna DB.
+     */
+    var queryResponse = adminClient.query(
+      q.Arr(
+        q.If(
+          q.Exists(q.Database(dbName)),
+          q.Delete(q.Database(dbName)),
+          true
+        ),
+        q.CreateDatabase(q.Obj("name" -> dbName))
+      )
     )
-  )
-  Await.result(queryResponse, Duration.Inf)
-  logger.info(s"Created database: ${dbName} :: \n${JsonUtil.toJson(queryResponse)}")
+    Await.result(queryResponse, Duration.Inf)
+    logger.info(s"Created database: ${dbName} :: \n${JsonUtil.toJson(queryResponse)}")
 
-  /*
-   * Create a key specific to the database we just created. We will use this to
-   * create a new client we will use in the remainder of the examples.
-   */
-  queryResponse = adminClient.query(
-    q.CreateKey(q.Obj("database" -> q.Database(dbName), "role" -> "server"))
-  )
-  val key = Await.result(queryResponse, Duration.Inf)
-  val serverKey = key(v.Field("secret").to[String]).get
-  logger.info(s"DB ${dbName} secret: ${serverKey}")
+    /*
+     * Create a key specific to the database we just created. We will use this to
+     * create a new client we will use in the remainder of the examples.
+     */
+    queryResponse = adminClient.query(
+      q.CreateKey(q.Obj("database" -> q.Database(dbName), "role" -> "server"))
+    )
+    val key = Await.result(queryResponse, Duration.Inf)
+    val dbSecret = key(v.Field("secret").to[String]).get
+    logger.info(s"DB ${dbName} secret: ${dbSecret}")
 
-  /*
-   * Create the DB specific DB client using the DB specific key just created.
-   */
-  val client = FaunaClient(endpoint = config("root_url"), secret = serverKey)
+    adminClient.close()
+    logger.info("Disconnected from FaunaDB as Admin!")
 
-  /*
-   * Create an class to hold customers
-   */
-  queryResponse = client.query(
-    q.CreateClass(q.Obj("name" -> "customers"))
-  )
-  Await.result(queryResponse, Duration.Inf)
-  logger.info(s"Created customer class :: \n${JsonUtil.toJson(queryResponse)}")
+    return dbSecret
+  }
 
-  /*
-   * Create the Indexes within the database. We will use these to access record in later lessons
-   */
-  queryResponse = client.query(
-    q.Arr(
-      q.CreateIndex(
-        q.Obj(
-          "name" -> "customer_by_id",
-          "source" -> q.Class("customers"),
-          "unique" -> true,
-          "terms" -> q.Arr(q.Obj("field" -> q.Arr("data", "id")))
+  def createDBClient (dcURL: String, secret: String): FaunaClient = {
+    /*
+    * Create the DB specific DB client using the DB specific key just created.
+    */
+    val client = FaunaClient(endpoint = dcURL, secret = secret)
+    logger.info("Connected to FaunaDB as server")
+
+    return client
+  }
+
+  def createSchema (client: FaunaClient): Unit = {
+    /*
+     * Create an class to hold customers
+     */
+    val result = client.query(
+      q.CreateClass(q.Obj("name" -> "customers"))
+    )
+    Await.result(result, Duration.Inf)
+    logger.info(s"Created customer class :: \n${JsonUtil.toJson(result)}")
+
+    /*
+     * Create the Indexes within the database. We will use these to access record in later lessons
+     */
+    val result2 = client.query(
+      q.Arr(
+        q.CreateIndex(
+          q.Obj(
+            "name" -> "customer_by_id",
+            "source" -> q.Class("customers"),
+            "unique" -> true,
+            "terms" -> q.Arr(q.Obj("field" -> q.Arr("data", "id")))
+          )
         )
       )
     )
-  )
-  Await.result(queryResponse, Duration.Inf)
-  logger.info(s"Created customer_by_id index :: \n${JsonUtil.toJson(queryResponse)}")
+    Await.result(result2, Duration.Inf)
+    logger.info(s"Created customer_by_id index :: \n${JsonUtil.toJson(result2)}")
+  }
 
-  /*
-   * Create a customer (record)
-  */
-  val custID = 0
-  var balance = 100.0
-  queryResponse = client.query(
-    q.Create(
-      q.Class("customers"), q.Obj("data" -> q.Obj("id" -> custID, "balance" -> balance))
-    )
-  )
-  Await.result(queryResponse, Duration.Inf)
-  logger.info(s"Create \'customer\' ${custID}: \n${JsonUtil.toJson(queryResponse)}")
-
-  /*
-   * Read the customer we just created
-   */
-  queryResponse = client.query(
-    q.Select("data", q.Get(q.Match(q.Index("customer_by_id"), custID)))
-  )
-  Await.result(queryResponse, Duration.Inf)
-  logger.info(s"Read \'customer\' ${custID}: \n${JsonUtil.toJson(queryResponse)}")
-
-  /*
-   * Update the customer
-   */
-  balance = 200.0
-  queryResponse = client.query(
-    q.Update(
-      q.Select("ref", q.Get(q.Match(q.Index("customer_by_id"), custID))),
-      q.Obj("data" -> q.Obj("balance" -> balance)
+  def createCustomer (client: FaunaClient, custID: Int, balance: Int): Unit = {
+    /*
+     * Create a customer (record)
+     */
+    val result = client.query(
+      q.Create(
+        q.Class("customers"), q.Obj("data" -> q.Obj("id" -> custID, "balance" -> balance))
       )
     )
-  )
-  Await.result(queryResponse, Duration.Inf)
-  logger.info(s"Update \'customer\' ${custID}: \n${JsonUtil.toJson(queryResponse)}")
+    Await.result(result, Duration.Inf)
+    logger.info(s"Create \'customer\' ${custID}: \n${JsonUtil.toJson(result)}")
+  }
 
-  /*
-   * Read the updated customer
-   */
-  queryResponse = client.query(
-    q.Select("data", q.Get(q.Match(q.Index("customer_by_id"), custID)))
-  )
-  Await.result(queryResponse, Duration.Inf)
-  logger.info(s"Read \'customer\' ${custID}: \n${JsonUtil.toJson(queryResponse)}")
+  def readCustomer (client: FaunaClient, custID: Int): Unit = {
+    /*
+     * Read the customer we just created
+     */
+    val result = client.query(
+      q.Select("data", q.Get(q.Match(q.Index("customer_by_id"), custID)))
+    )
+    Await.result(result, Duration.Inf)
+    logger.info(s"Read \'customer\' ${custID}: \n${JsonUtil.toJson(result)}")
+  }
 
-  /*
-   * Delete the customer
-   */
-//  queryResponse = client.query(
-//    q.Delete(
-//      q.Select("ref", q.Get(q.Match(q.Index("customer_by_id"), custID)))
-//    )
-//  )
-//  logger.info(s"Delete \'customer\' ${custID}: \n${toJson(queryResponse)}")
+  def updateCustomer (client: FaunaClient, custID: Int, newBalance: Int): Unit = {
+    /*
+     * Update the customer
+     */
+    val result = client.query(
+      q.Update(
+        q.Select("ref", q.Get(q.Match(q.Index("customer_by_id"), custID))),
+        q.Obj("data" -> q.Obj("balance" -> newBalance)
+        )
+      )
+    )
+    Await.result(result, Duration.Inf)
+    logger.info(s"Update \'customer\' ${custID}: \n${JsonUtil.toJson(result)}")
+  }
+
+  def deleteCustomer (client: FaunaClient, custID: Int): Unit = {
+    /*
+     * Delete the customer
+     */
+    val result = client.query(
+      q.Delete(
+        q.Select("ref", q.Get(q.Match(q.Index("customer_by_id"), custID)))
+      )
+    )
+    logger.info(s"Delete \'customer\' ${custID}: \n${JsonUtil.toJson(result)}")
+  }
+
+
+  val dcURL = "http://127.0.0.1:8443"
+  val secret = "secret"
+  val dbName = "LedgerExample"
+
+  val dbSecret = createDatabase(dcURL, secret, dbName)
+
+  val client = createDBClient(dcURL, dbSecret)
+
+  createSchema(client)
+
+  createCustomer(client, 0, 100)
+
+  readCustomer(client, 0)
+
+  updateCustomer(client, 0, 200)
+
+  readCustomer(client, 0)
+
+  deleteCustomer(client, 0)
 
   /*
    * Just to keep things neat and tidy, close the client connections
    */
   client.close()
   logger.info(s"Disconnected from FaunaDB as server for DB ${dbName}!")
-  adminClient.close()
-  logger.info("Disconnected from FaunaDB as Admin!")
 
   // add this at the end of execution to make things shut down nicely
   System.exit(0)
