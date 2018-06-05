@@ -25,6 +25,7 @@ import grizzled.slf4j.Logging
 import scala.concurrent.duration.Duration
 import scala.concurrent.{Await, ExecutionContext}
 import scala.util.{Success, Try}
+import util.Random._
 
 /*
  * These are the required imports for Fauna.
@@ -35,8 +36,13 @@ import scala.util.{Success, Try}
  */
 import faunadb.{FaunaClient, query => q, values => v}
 
-object Lesson3 extends App with Logging {
+object Lesson4 extends App with Logging {
   import ExecutionContext.Implicits._
+
+  case class Customer(id: Int, balance: Int)
+  implicit val customerCodec = v.Codec.caseClass[Customer]
+  case class Transaction(uuid: String, sourceCust: Int, destCust: Int, amount: Int)
+  implicit val transactionCodec = v.Codec.caseClass[Transaction]
 
   def createDatabase(dcURL: String, secret: String, dbName: String): String = {
     /*
@@ -90,16 +96,21 @@ object Lesson3 extends App with Logging {
     return client
   }
 
-  def createSchema(client: FaunaClient): Unit = {
+  def createClasses(client: FaunaClient): Unit = {
     /*
      * Create an class to hold customers
      */
     val result = client.query(
-      q.CreateClass(q.Obj("name" -> "customers"))
+      q.Arr(
+        q.CreateClass(q.Obj("name" -> "customers")),
+        q.CreateClass(q.Obj("name" -> "transactions"))
+      )
     )
     Await.result(result, Duration.Inf)
     logger.info(s"Created 'customer' class :: \n${JsonUtil.toJson(result)}")
+  }
 
+  def createIndices(client: FaunaClient): Unit = {
     /*
      * Create two indexes here. The first index is to query customers when you know specific id's.
      * The second is used to query customers by range. Examples of each type of query are presented
@@ -125,6 +136,17 @@ object Lesson3 extends App with Logging {
               q.Obj("field" -> q.Arr("ref"))
             )
           )
+        ),
+        q.CreateIndex(
+          q.Obj(
+            "name" -> "transaction_uuid_filter",
+            "source" -> q.Class("transactions"),
+            "unique" -> true,
+            "values" -> q.Arr(
+              q.Obj("field" -> q.Arr("data", "id")),
+              q.Obj("field" -> q.Arr("ref"))
+            )
+          )
         )
       )
     )
@@ -132,144 +154,115 @@ object Lesson3 extends App with Logging {
     logger.info(s"Created 'customer_by_id' index & 'customer_id_filter' index ::\n${JsonUtil.toJson(result2)}")
   }
 
-  def createCustomers(client: FaunaClient): Unit = {
+  def createCustomers(client: FaunaClient, numCustomers: Int, initBalance: Int): Seq[v.RefV] = {
     /*
-     * Create numCustomers customer records with ids from 1 to 20
+     * Create 'numCustomers' customer records with ids from 1 to 'numCustomers'
      */
-    val result = client.query(
-      q.Map((1 to 20).toList,
-        q.Lambda { id =>
-          q.Create(
-            q.Class("customers"),
-            q.Obj("data" -> q.Obj("id" -> id, "balance" -> 100))
-          )
-        }
-      )
-    )
-    Await.result(result, Duration.Inf)
-  }
+    var custRefs: Seq[v.RefV] = null
 
-  def readCustomer(client: FaunaClient, custID: Int): Unit = {
-    /*
-     * Read the customer we just created
-     */
-    val result = client.query(
-      q.Select("data", q.Get(q.Match(q.Index("customer_by_id"), custID)))
-    )
-    Await.result(result, Duration.Inf)
-    logger.info(s"Read \'customer\' ${custID}: \n${JsonUtil.toJson(result)}")
-  }
-
-  def readThreeCustomers(client: FaunaClient, custID1: Int, custID2: Int, custID3: Int): Unit = {
-    /*
-     * Here is a more general use case where we retrieve multiple class references
-     * by id and return the actual data underlying them.
-     */
-    val result = client.query(
-      q.Map(
-        q.Paginate(
-          q.Union(
-            q.Match(q.Index("customer_by_id"), custID1),
-            q.Match(q.Index("customer_by_id"), custID2),
-            q.Match(q.Index("customer_by_id"), custID3)
-          )
-        ),
-        q.Lambda { x => q.Select("data", q.Get(x)) }
-      )
-    )
-    Await.result(result, Duration.Inf)
-    logger.info(s"Union specific \'customer\' ${custID1}, ${custID2}, ${custID3} \n${JsonUtil.toJson(result)}")
-  }
-
-  def readListOfCustomers(client: FaunaClient, custIDs: List[Int]): Unit = {
-    /*
-     * Finally a much more general use case where we can supply any number of id values
-     * and return the data for each.
-     */
-    val result = client.query(
-      q.Map(
-        q.Paginate(
-          q.Union(
-            q.Map(custIDs,
-              q.Lambda { y => q.Match(q.Index("customer_by_id"), y) }
+    val result = Try{
+      val stmt = client.query(
+        q.Map(for (i <- 1 to numCustomers) yield {Customer(id = i, balance = initBalance)},
+          q.Lambda { customer =>
+            q.Create(
+              q.Class("customers"),
+              q.Obj("data" -> customer)
             )
-          )
-        ),
-        q.Lambda { x => q.Select("data", q.Get(x)) }
-      )
-    )
-    Await.result(result, Duration.Inf)
-    logger.info(s"Union variable \'customer\' ${custIDs}: \n${JsonUtil.toJson(result)}")
-  }
-
-  def readCustomersLessThan(client: FaunaClient, maxCustID: Int): Unit = {
-    /*
-     * In this example we use the values based filter 'customer_id_filter'.
-     * using this filter we can query by range. This is an example of returning
-     * all the values less than(<) or before 5. The keyword 'after' can replace
-     * 'before' to yield the expected results.
-     */
-    val result = client.query(
-      q.Map(
-        q.Paginate(q.Match(q.Index("customer_id_filter")), cursor = q.Before(5)),
-        q.Lambda { x => q.Select("data", q.Get(q.Select(1, x))) }
-      )
-    )
-    Await.result(result, Duration.Inf)
-    logger.info(s"Query for id\'s < ${maxCustID} : \n${JsonUtil.toJson(result)}")
-  }
-
-  def readCustomersBetween(client: FaunaClient, minCustID: Int, maxCustID: Int): Unit = {
-    /*
-     * Extending the previous example to show getting a range between two values.
-     */
-    val result = client.query(
-      q.Map(
-        q.Filter(q.Paginate(q.Match(q.Index("customer_id_filter")), cursor = q.Before(maxCustID)),
-          q.Lambda { y => q.LTE(minCustID, q.Select(0, y)) } ),
-        q.Lambda { x => q.Select("data", q.Get(q.Select(1, x))) }
-      )
-    )
-    Await.result(result, Duration.Inf)
-    logger.info(s"Query for id\'s >= ${minCustID}  and < ${maxCustID} : \n${JsonUtil.toJson(result)}")
-  }
-
-  def readAllCustomers(client: FaunaClient): Unit = {
-    /*
-     * Read all the records that we created.
-     * Use a small'ish page size so that we can demonstrate a paging example.
-     *
-     * NOTE: after is inclusive of the value.
-     */
-    val pageSize: Int = 16
-    var cursorPos: Option[v.Value] = None
-
-    do {
-      val result = Try {
-        val stmt = client.query(
-          q.Map(
-            q.Paginate(q.Match(q.Index("customer_id_filter")),
-              cursor = cursorPos.map(q.After(_)) getOrElse q.NoCursor,
-              size = pageSize),
-            q.Lambda { x => q.Select("data", q.Get(q.Select(1, x))) }
-          )
+          }
         )
-        Await.result(stmt, Duration.Inf)
-      } match {
-        case Success(s) => {
-          val data = s("data").to[List[v.Value]].get
-          logger.info(s"Page Data Results:  \n${JsonUtil.toJson(data)}")
+      )
+      Await.result(stmt, Duration.Inf)
+    } match {
+      case Success(s) => {
+        custRefs = s.collect(v.Field("ref").to[v.RefV]).get
+      }
+    }
 
+    logger.info(s"Created ${numCustomers} new customers with balance: ${initBalance}")
 
-          cursorPos = s("after").toOpt
-          if (cursorPos.isDefined) {
-            logger.info(s"Page After Results:  \n${JsonUtil.toJson(cursorPos)}")
+    return custRefs
+  }
+
+  def sumCustBalances(client: FaunaClient, custRefs: Seq[v.RefV]): Int = {
+    /*
+     * This is going to take the customer references that were created during the
+     * createCustomers routine and aggregate all the balances for them. We could so this,
+     * and probably would, with class index. In this case we want to take this approach to show
+     * how to use references.
+     */
+    var balanceSum: Int = 0
+
+    val result = Try{
+      val stmt = client.query(
+        q.Map(custRefs,
+          q.Lambda { cust => q.Select("data", q.Get(cust))}
+        )
+      )
+      Await.result(stmt, Duration.Inf)
+    } match {
+      case Success(s) => {
+        val data = s.to[Seq[Customer]].get
+        for ( c <- data) {
+          balanceSum += c.balance
+        }
+      }
+    }
+
+    logger.info(s"Customer Balance Sum: ${balanceSum}")
+
+    return balanceSum
+  }
+
+  def createTxn (client: FaunaClient, numCustomers: Int, maxTxnAmount: Int): Unit = {
+    /*
+     * This method is going to create a random transaction that moves a random amount
+     * from a source customer to a destination customer. Prior to committing the transaction
+     * a check will be performed to insure that the source customer has a sufficient balance
+     * to cover the amount and not go into an overdrawn state.
+     */
+    val uuid: String = java.util.UUID.randomUUID.toString
+
+    val sourceID = nextInt(numCustomers) + 1
+    var destID = nextInt(numCustomers) + 1
+    while (destID == sourceID) {
+      destID = nextInt(numCustomers) + 1
+    }
+    val amount = nextInt(maxTxnAmount) + 1
+
+    val transaction = Transaction(uuid, sourceID, destID, amount)
+
+    val stmt = client.query(
+      q.Let {
+        val sourceCust = q.Get(q.Match(q.Index("customer_by_id"), sourceID))
+        val destCust = q.Get(q.Match(q.Index("customer_by_id"), destID))
+        q.Let {
+          val sourceBalance = q.Select(q.Arr("data", "balance"), sourceCust)
+          val destBalance = q.Select(q.Arr("data", "balance"), destCust)
+          q.Let {
+            val newSourceBalance = q.Subtract(q.Var("sourceBalance"), amount)
+            val newDestBalance = q.Add(q.Var("destBalance"), amount)
+            q.If(
+              q.GTE(q.Var("newSourceBalance"), 0),
+              q.Do(
+                q.Create(q.Class("transactions"),
+                  q.Obj("data" -> transaction)),
+                q.Update(
+                  q.Select("ref", sourceCust), q.Obj(
+                    "data" -> q.Obj(
+                      "balance" -> q.Var("newSourceBalance")))),
+                q.Update(
+                  q.Select("ref", destCust), q.Obj(
+                    "data" -> q.Obj(
+                      "balance" -> q.Var("newDestBalance"))))
+              ),
+              "Error. Insufficient funds."
+            )
           }
         }
       }
-    } while (cursorPos.isDefined)
+    )
+    Await.result(stmt, Duration.Inf)  // don't really need to do this here as we can send these all Async
   }
-
 
   val dcURL = "http://127.0.0.1:8443"
   val secret = "secret"
@@ -279,21 +272,19 @@ object Lesson3 extends App with Logging {
 
   val client = createDBClient(dcURL, dbSecret)
 
-  createSchema(client)
+  createClasses(client)
 
-  createCustomers(client)
+  createIndices(client)
 
-  readCustomer(client, 1)
+  val custRefs = createCustomers(client, 50, 100)
 
-  readThreeCustomers(client, 1, 3, 8)
+  sumCustBalances(client, custRefs)
 
-  readListOfCustomers(client, List(1, 3, 6, 7))
+  for (i <- 1 to 100) {
+    createTxn(client, 50, 10)
+  }
 
-  readCustomersLessThan(client, 5)
-
-  readCustomersBetween(client, 5, 11)
-
-  readAllCustomers(client)
+  sumCustBalances(client, custRefs)
 
   /*
    * Just to keep things neat and tidy, close the client connections

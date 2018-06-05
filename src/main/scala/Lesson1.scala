@@ -14,7 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package com.fauna.learnfauna
+package com.fauna.learn
 
 /*
  * These imports are for basic functionality around logging and JSON handling and Futures.
@@ -22,8 +22,8 @@ package com.fauna.learnfauna
  */
 import grizzled.slf4j.Logging
 
-import scala.concurrent.{Await, ExecutionContext}
 import scala.concurrent.duration.Duration
+import scala.concurrent.{Await, ExecutionContext}
 
 /*
  * These are the required imports for Fauna.

@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-package com.fauna.learnfauna
+package com.fauna.learn
 /*
  * Simple way to clean up JSON return values from Fauna interactions.
  * This was code I found so not original to this effort apologies for lack ot attribution
