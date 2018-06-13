@@ -30,7 +30,7 @@ import util.Random._
 /*
  * These are the required imports for Fauna.
  *
- * For these examples we are using the 2.1.0 version of the JVM driver. Also notice that we aliasing
+ * For these examples we are using the 2.2.0 version of the JVM driver. Also notice that we aliasing
  * the query and values part of the API to make it more obvious we we are using Fauna functionality.
  *
  */
@@ -98,7 +98,7 @@ object Lesson4 extends App with Logging {
 
   def createClasses(client: FaunaClient): Unit = {
     /*
-     * Create an class to hold customers
+     * Create an class to hold customers and transactions
      */
     val result = client.query(
       q.Arr(
@@ -151,7 +151,7 @@ object Lesson4 extends App with Logging {
       )
     )
     Await.result(result2, Duration.Inf)
-    logger.info(s"Created 'customer_by_id' index & 'customer_id_filter' index ::\n${JsonUtil.toJson(result2)}")
+    logger.info(s"Created 'customer_by_id', 'customer_id_filter' and 'transactions_uuid_filter' indices. ::\n${JsonUtil.toJson(result2)}")
   }
 
   def createCustomers(client: FaunaClient, numCustomers: Int, initBalance: Int): Seq[v.RefV] = {
@@ -249,11 +249,11 @@ object Lesson4 extends App with Logging {
                 q.Update(
                   q.Select("ref", sourceCust), q.Obj(
                     "data" -> q.Obj(
-                      "balance" -> q.Var("newSourceBalance")))),
+                      "balance" -> q.Var("newSourceBalance"), "txnID" -> uuid))),
                 q.Update(
                   q.Select("ref", destCust), q.Obj(
                     "data" -> q.Obj(
-                      "balance" -> q.Var("newDestBalance"))))
+                      "balance" -> q.Var("newDestBalance"), "txnID" -> uuid)))
               ),
               "Error. Insufficient funds."
             )
@@ -280,7 +280,7 @@ object Lesson4 extends App with Logging {
 
   sumCustBalances(client, custRefs)
 
-  for (i <- 1 to 100) {
+  for (i <- 1 to 1000) {
     createTxn(client, 50, 10)
   }
 

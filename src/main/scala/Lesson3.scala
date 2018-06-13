@@ -29,7 +29,7 @@ import scala.util.{Success, Try}
 /*
  * These are the required imports for Fauna.
  *
- * For these examples we are using the 2.1.0 version of the JVM driver. Also notice that we aliasing
+ * For these examples we are using the 2.2.0 version of the JVM driver. Also notice that we aliasing
  * the query and values part of the API to make it more obvious we we are using Fauna functionality.
  *
  */
